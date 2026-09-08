@@ -23,3 +23,8 @@ build/
 android/local.properties
 ios/Flutter/Generated.xcconfig
 .DS_Store
+**/key.properties
+**/local.properties
+*.apk
+*.aab
+*.hprof

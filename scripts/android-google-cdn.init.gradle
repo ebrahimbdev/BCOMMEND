@@ -1,0 +1,16 @@
+// Optional local build workaround when dl.google.com returns 404 in the current network.
+// Google's official download redirector, NOT a third-party Maven mirror.
+def useGoogleCdn = { repository ->
+    if (repository instanceof org.gradle.api.artifacts.repositories.MavenArtifactRepository &&
+        repository.url.host == 'dl.google.com') {
+        repository.setUrl('https://redirector.gvt1.com/edgedl/android/maven2/')
+    }
+}
+gradle.beforeSettings { settings ->
+    settings.pluginManagement.repositories.all(useGoogleCdn)
+    settings.dependencyResolutionManagement.repositories.all(useGoogleCdn)
+}
+gradle.beforeProject { project ->
+    project.repositories.all(useGoogleCdn)
+    project.buildscript.repositories.all(useGoogleCdn)
+}

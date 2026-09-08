@@ -1,8 +1,16 @@
 # BCOMMEND
 
-Android-only notes and reminders with required end-to-end encryption (E2EE), designed for Persian/English content and approximately 10 low-volume daily users. The full product scope includes a free canvas, finger handwriting without a stylus, PDF annotations, audio, recurring reminders, offline editing, local OCR/search, collaboration, portable exports, and a browser clipper.
+Android 11+ notes and reminders with required end-to-end encryption (E2EE), intended for public availability on phones and tablets, not one handset. Approximately 10 low-volume daily users is an initial capacity assumption. The full Persian/English product scope includes a free canvas, finger handwriting without a stylus, PDF annotations, audio, recurring reminders, offline editing, local OCR/search, collaboration, portable exports, and a browser clipper.
 
-**Current delivery: Stage 2A encrypted transport foundation, implemented and locally verified. This is not a complete E2EE application, Android application, or production service.**
+**Current delivery: locally verified Stage 2A encrypted transport plus a Flutter Android local preview with three successfully built debug APKs. Physical-device and emulator validation are pending. This is not a complete production E2EE application or service.** See [Android preview](docs/ANDROID_PREVIEW.md) for build instructions, artifact evidence, and data-loss warnings.
+
+Local mobile checks passed: **45 Flutter tests and `flutter analyze` with zero issues**. This records the completed run; the final rebuild, hashes, and any later test totals belong in [verification](docs/VERIFICATION.md). No remote GitHub Actions or artifact availability is verified.
+
+Built files under `apps/mobile/build/app/outputs/flutter-apk/` (never commit APKs to Git):
+
+- `app-arm64-v8a-debug.apk`: recommended for most modern phones, not all phones.
+- `app-armeabi-v7a-debug.apk`: legacy 32-bit ARM devices that meet the Android minimum.
+- `app-x86_64-debug.apk`: primarily x86-64 emulators.
 
 ## Foundation Status
 
@@ -12,11 +20,13 @@ Android-only notes and reminders with required end-to-end encryption (E2EE), des
 - Bounded note lists and input validation, safe error responses, and no public registration route.
 - Envelope validation in `packages/protocol/src/note-envelope.ts` and a WebCrypto client reference in `packages/crypto/src/notes.ts`; note lists expose metadata only.
 - The pure once/interval scheduling core remains; the authenticated reminder preview endpoint is retired with `410` because private scheduling belongs on the client.
-- 117 tests pass in the Linux Workers runtime, followed by a real HTTP encrypted round-trip against the built Worker. See [verification](docs/VERIFICATION.md); remote GitHub Actions status is not yet verified.
+- Local Workers verification includes a real HTTP encrypted round-trip against the built Worker. Mobile crypto/model/repository tests have passed, including a fixed Node interoperability vector. Final counts and build evidence belong in [verification](docs/VERIFICATION.md); remote GitHub Actions status is not yet verified.
 
-There is **no** Flutter UI, complete editor, notebook hierarchy API, persisted reminder CRUD, notification delivery, OAuth login, CRDT sync, file upload, OCR, or live Cloudflare deployment yet. Envelopes are not a final portable canvas format. A version counter is not retained version history. Soft deletion is not a complete trash/restore feature.
+The Flutter preview provides Persian RTL, warm-paper Material 3 light/dark phone/tablet layouts, local note CRUD, typed text and fixed 1000 x 1400 finger ink in separate tabs, explicit draw/navigation modes, one-finger drawing, two-finger pan/zoom, undo, three colors, and local string search. It uses explicit Save, not autosave; back navigation offers save/discard and a failed save retains edits. This is not the full mixed-content free canvas.
 
-**Do not store important data. `generateNoteKey()` creates a nonexportable, memory-only reference key. Without a reviewed vault, persistence, wrapping, or recovery, encrypted content can become unrecoverable when the process ends.** An authentication session does not decrypt content, and OAuth account recovery is not data recovery. Secure persistence, device pairing, key authentication, and encrypted sharing are not implemented.
+Backup, recovery, sync, OAuth, UI reminders/notifications, OCR, PDF, audio, export, collaboration, notebook hierarchy, and a live Cloudflare deployment are **not implemented**. Envelopes are not a final portable canvas format. A version counter is not retained version history. Soft deletion is not a complete trash/restore feature.
+
+**Do not store important data. Manually save before killing the app; unsaved edits are lost. Uninstall, app-data clearing, or key loss makes saved notes unrecoverable; no recovery codes or backup exist.** The mobile per-installation AES-256-GCM key persists across app restarts through Android Keystore-backed secure storage; it is not a hardware-only AES handle and is exportable inside the Dart process. The separate TypeScript `generateNoteKey()` reference remains nonexportable and memory-only. Authentication sessions do not decrypt content, and OAuth account recovery is not data recovery. The local random owner UUID is not a backend account; sync requires future enrollment and re-encryption. See [security](SECURITY.md).
 
 Migration `0002` leaves old plaintext notes untouched and unreachable through the current API. It neither encrypts old data nor securely purges disks or backups. There are no shipped consumers requiring a legacy plaintext fallback. Do not delete development data without authorization.
 
@@ -74,6 +84,7 @@ The port is published only to localhost on the host. The named volume is develop
 
 - `apps/api/src/`: Worker and deterministic schedule core.
 - `apps/api/migrations/`: D1 schema migrations.
+- `apps/mobile/`: Flutter Android local preview and encrypted local repository.
 - `packages/protocol/src/note-envelope.ts`: encrypted note envelope validation.
 - `packages/crypto/src/notes.ts`: WebCrypto client reference, not a durable key vault.
 - `tests/`: synthetic-data Worker/D1 integration and scheduling tests.
@@ -82,13 +93,14 @@ The port is published only to localhost on the host. The named volume is develop
 - `docs/ROADMAP.md`: staged delivery with explicit gates.
 - `docs/API.md`: implemented API contract and examples.
 - `docs/SETUP.md`: user preparation and deployment safety requirements.
+- `docs/ANDROID_PREVIEW.md`: Docker build, install safety, compatibility and pending preview checks.
 - `SECURITY.md`: security boundaries and reporting guidance.
 
 ## Delivery Policy
 
-Every completed stage is reviewed, tested, committed, and pushed independently. A Git push is **not** a deployment or an assertion that all product features exist. GitHub Actions performs checks only; it has no Cloudflare deployment credentials.
+Every completed stage is reviewed, tested, committed, and pushed independently. A Git push is **not** a deployment, public APK publication, or an assertion that all product features exist. GitHub Actions has no Cloudflare deployment credentials; future preview artifacts are not an automatic public release.
 
-Next gates are a reviewed vault/recovery design and Android finger-ink, encrypted collaboration, and local OCR feasibility. Flutter is not installed. Android-only and required E2EE are confirmed; iOS, APNs, macOS workflows, stylus input, pressure features, and palm rejection are out of scope, not pending. Finger input requires explicit draw/navigation modes, one-finger ink in draw mode, two-finger pan/zoom, and ambiguous-gesture tests; no pressure support is promised.
+Next gates include preview device validation, reviewed vault/recovery design, full mixed-canvas feasibility, encrypted collaboration, and local OCR. Flutter 3.35.7 is available in the local `ghcr.io/cirruslabs/flutter:3.35.7` Docker image; no host Flutter/SDK installation is needed. The image includes SDK 35 only; [Docker instructions](docs/ANDROID_PREVIEW.md) install SDK 36 and the required NDK into a persistent volume. Android 11+ (`minSdk 30`), finger-only input, and required E2EE are confirmed. iOS, APNs, macOS workflows, stylus input, pressure, and palm rejection are out of scope. No physical model is required to settle scope, but physical-device gesture and compatibility tests remain release gates.
 
 ## Capacity and Cost
 

@@ -4,11 +4,11 @@
 
 This is a gated implementation sequence, not a schedule. The full product and acceptance criteria are in `PRD.md`. Stage 2A encrypted transport is implemented and locally verified; see `VERIFICATION.md`. Later product stages remain PROPOSED. A stage becomes complete only when its exit evidence is reviewed, not when a stub, schema, or document exists.
 
-Current constraints: the repository is being built concurrently; Flutter is not installed; no mobile app, complete editor, live Cloudflare resources, or production identity exists. The public repository is https://github.com/ebrahimbdev/BCOMMEND.git. This roadmap does not certify the current code or CI state.
+Current constraints: a Flutter Android local preview is implemented, local tests/analysis passed, and three split-ABI debug APKs built successfully. Flutter 3.35.7 and the documented SDK setup run in Docker without host Flutter/Android SDK installation. A full editor, live Cloudflare resources, and production identity are absent. The public repository is https://github.com/ebrahimbdev/BCOMMEND.git. No physical-device/emulator test, remote CI/artifact success, or public APK release is claimed.
 
 ## Stage 1: Backend Foundation
 
-**Status: historical locally verified foundation; no new remote CI claim.** Requirements: REQ-001 through REQ-004. The 2026-09-07 Linux Docker result of 69 tests, TypeScript checks, dry-run bundle, migration replay, and local HTTP smoke checks is historical only. It is not a current Stage 2A count or certification. Native Windows workerd has an access-violation blocker. No deployment occurred. Current evidence belongs to the main implementation's `VERIFICATION` record.
+**Status: historical locally verified foundation; no new remote CI claim.** Requirements: REQ-001 through REQ-004. Historical Linux Docker tests, TypeScript checks, dry-run bundle, migration replay, and local HTTP smoke checks are not current-stage certification. Native Windows workerd has an access-violation blocker. No deployment occurred. Current evidence and final counts belong in `VERIFICATION.md`.
 
 Scope:
 
@@ -38,9 +38,9 @@ Not included: a complete editor, Flutter client, notebook UI, CRDT synchronizati
 - Retire authenticated `/v1/reminders/preview` with `410`, retaining the pure `schedule.ts` core. Private reminder scheduling runs locally.
 - Use migration `0002` with a separate encrypted-notes table. Leave old notes untouched and unreachable by the API, with no legacy fallback because there are no shipped consumers. Migration is not automatic encryption or secure purge; plaintext remains possible on disk/backups. Never delete development data without authorization.
 
-Local exit evidence: 117 tests passed, along with TypeScript, the dry-run bundle, migration replay, and a real encrypted HTTP round-trip against the built Worker. See `VERIFICATION.md`. Remote CI remains unverified. Shape validation cannot establish whether a buggy client uploaded base64 plaintext; only clients verify AEAD. Ciphertext storage is not complete application E2EE.
+Local exit evidence includes passing tests, TypeScript, the dry-run bundle, migration replay, and a real encrypted HTTP round-trip against the built Worker. See `VERIFICATION.md` for counts. Remote CI remains unverified. Shape validation cannot establish whether a buggy client uploaded base64 plaintext; only clients verify AEAD. Ciphertext storage is not complete application E2EE.
 
-**Startup blocker for important data: keys are nonexportable and generated in memory only. Process exit can make content unrecoverable.** Secure vault/persistence, wrapping, recovery, device pairing, key authentication, and encrypted sharing are absent. Authentication sessions do not decrypt; OAuth account recovery is not data recovery.
+**Do not store important data.** The TypeScript reference key remains nonexportable and memory-only. Mobile now persists a per-installation AES-256-GCM key in Android Keystore-backed secure storage and encrypted files across restart, but has no backup/recovery, device pairing, key authentication, or encrypted sharing. Save manually before killing the app; uninstall or key loss is unrecoverable. The Dart key is exportable inside the process. Sessions do not decrypt; OAuth recovery is not data recovery.
 
 ### Next Security and Feasibility Gates
 
@@ -51,7 +51,7 @@ Run architecture spikes before committing to the later mobile implementation or 
 - Editor/ink: compare Flutter/native/embedded approaches for Android mixed rich text, images, finger vector strokes, spatial selection, RTL, PDF, accessibility, and licensing. Require explicit draw/navigation modes, one-finger ink in draw mode, and two-finger pan/zoom. Test ambiguous gestures, second-finger arrival, cancellation/lift, and mode transitions without unintended ink. No pressure promise. Prototypes are evidence, not a delivered app.
 - CRDT: test concurrent text, geometry, strokes, hierarchy, deletion, undo, reconnect, and schema evolution on clients. Durable Objects may relay encrypted CRDT updates, not merge plaintext. Measure encrypted operation growth and synchronization cost.
 - OCR: evaluate local Persian/English printed and handwritten recognition on a consented or synthetic corpus. Agree numerical quality thresholds and measure errors, latency, and device budgets. Workers AI must not receive private content.
-- Security and device setup: select the Android test model/minimum OS, install Flutter and Android SDK, choose OAuth/license, and approve recovery UX. E2EE and Android-only scope are settled.
+- Security and device setup: Android 11+ (`minSdk 30`) is confirmed for a publicly available phone/tablet app, not one handset. Use the available Docker SDK, select a physical test matrix, choose OAuth/license/distribution, and approve recovery UX. E2EE and finger-only Android scope are settled.
 
 Exit evidence:
 
@@ -64,9 +64,11 @@ Do not bypass failed gates by labeling an untested provider or editor package pr
 
 ## Stage 3: Local-First Mobile Capture
 
-**Status: PROPOSED; depends on Stage 2 decisions.** Requirements: REQ-010 through REQ-014, REQ-062, and the local persistence portion of REQ-040.
+**Status: basic local preview implemented; full stage and device acceptance pending.** Requirements: REQ-010 through REQ-014, REQ-062, and the local persistence portion of REQ-040.
 
-- Install and validate Flutter and Android SDK, then implement the Android shell and reviewed secure local durable storage.
+Delivered preview scope: Persian RTL warm-paper Material 3 light/dark phone/tablet UI, local CRUD/string search, separate typed-text and fixed 1000 x 1400 ink tabs, explicit draw/navigation, one-finger ink/two-finger pan-zoom, undo and three colors. Explicit save and back save/discard guard retain edits on save failure. Complete UTF-8 JSON size checks precede text/stroke acceptance; active gestures block Save/back/delete/tab changes until all fingers lift. App-private encrypted files use serialized atomic replacement, queued native directory fsync, and a persisted per-installation key, not a sync-ready vault. Corrupt loads offer retry; key failures do not silently reset disk. Uncertain saves retain drafts with the written revision for retry; uncertain deletion is explicitly reported, not described as preserved. Tests use fake storage failures/key storage, not proof of OEM power-loss durability. Local tests/analysis and three debug APK builds passed. Manifest/signature/alignment inspection is recorded in `ANDROID_PREVIEW.md`; final-run counts and hashes belong in `VERIFICATION.md`. Device checks remain pending.
+
+- Validate the Docker-built Android preview and physical restart/gesture behavior; complete the reviewed production vault/recovery design beyond current local storage.
 - Build notebook/section/page/subpage organization and the selected mixed-content free canvas.
 - Add finger-only vector ink with explicit draw/navigation modes, one-finger drawing, two-finger pan/zoom, image handling, and Persian/English rich text. Exclude pressure and palm rejection features.
 - Add PDF annotation and consent-based audio recording with time anchors, using explicit attachment and recording limits.
@@ -138,6 +140,7 @@ Exit evidence: archive round trips preserve the documented fields/assets; restor
 - Verify current service quotas/pricing and measure the approximately 10-daily-user low-volume workload. Apply upload/recording limits, rate limits, OCR budgets, retention, and tested degradation behavior.
 - Run deployed end-to-end authorization, synchronization, recurrence, push, restore, and deletion tests on the confirmed devices.
 - Review privacy notices, recording/OCR consent, dependency licenses, accessibility limitations, support procedures, and distribution costs before release.
+- Privately create stable release signing, select Play Store versus APK distribution and a license, and verify artifact identity, merged min/target SDK, ABIs, permissions, renderer/device behavior, 16 KB page-size compatibility, and current target-SDK store policy. Debug preview ID `dev.bcommend.bcommend_mobile.preview` is not production identity. Release signing has no debug fallback; future Actions artifacts are not automatic public publication.
 
 Exit evidence: independent crypto/security review, Kotlin/Dart interoperability vector tests, successful vault recovery/restore exercises, deployed Android tests, observable usage, and accepted budgets. R2 overage remains billable; alerts are not guaranteed hard caps. Any FCM setup and Android distribution costs are separate from Cloudflare hosting.
 

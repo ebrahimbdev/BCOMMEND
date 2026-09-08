@@ -17,3 +17,8 @@ coverage
 **/*.keystore
 **/*.sqlite*
 **/*.db
+**/.dart_tool
+**/.gradle
+**/build
+**/local.properties
+**/key.properties
