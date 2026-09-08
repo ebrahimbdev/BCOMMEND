@@ -1,19 +1,26 @@
 # BCOMMEND
 
-Mobile-first notes and reminders, designed for Persian/English content and approximately 10 low-volume daily users. The product scope includes a free canvas, vector handwriting, PDF annotations, audio, recurring reminders, offline editing, OCR, and collaboration.
+Android-only notes and reminders with required end-to-end encryption (E2EE), designed for Persian/English content and approximately 10 low-volume daily users. The full product scope includes a free canvas, finger handwriting without a stylus, PDF annotations, audio, recurring reminders, offline editing, local OCR/search, collaboration, portable exports, and a browser clipper.
 
-**Current delivery: Stage 1 backend foundation only. This is not yet a mobile application or a production service.**
+**Current delivery: Stage 2A encrypted transport foundation, implemented and locally verified. This is not a complete E2EE application, Android application, or production service.**
 
-## Implemented
+## Foundation Status
 
 - Cloudflare Worker with a public liveness endpoint and authenticated API.
-- D1 migrations for users, hashed expiring sessions, and private plain-text notes.
+- D1 migrations for users, hashed expiring sessions, and a separate encrypted-notes table in migration `0002`.
 - Owner-isolated create/read/update/soft-delete operations with atomic version checks.
 - Bounded note lists and input validation, safe error responses, and no public registration route.
-- Deterministic preview of one-time and elapsed-time interval schedules, including count or end-date limits.
-- Worker-runtime integration tests, schedule unit tests, local HTTP smoke checks, and GitHub Actions verification.
+- Envelope validation in `packages/protocol/src/note-envelope.ts` and a WebCrypto client reference in `packages/crypto/src/notes.ts`; note lists expose metadata only.
+- The pure once/interval scheduling core remains; the authenticated reminder preview endpoint is retired with `410` because private scheduling belongs on the client.
+- 117 tests pass in the Linux Workers runtime, followed by a real HTTP encrypted round-trip against the built Worker. See [verification](docs/VERIFICATION.md); remote GitHub Actions status is not yet verified.
 
-There is **no** Flutter UI, complete editor, notebook hierarchy API, persisted reminder CRUD, notification delivery, OAuth login, CRDT sync, file upload, OCR, or live Cloudflare deployment yet. Notes are currently plain text, not a final portable canvas format. A version counter is not retained version history. Soft deletion is not a complete trash/restore feature.
+There is **no** Flutter UI, complete editor, notebook hierarchy API, persisted reminder CRUD, notification delivery, OAuth login, CRDT sync, file upload, OCR, or live Cloudflare deployment yet. Envelopes are not a final portable canvas format. A version counter is not retained version history. Soft deletion is not a complete trash/restore feature.
+
+**Do not store important data. `generateNoteKey()` creates a nonexportable, memory-only reference key. Without a reviewed vault, persistence, wrapping, or recovery, encrypted content can become unrecoverable when the process ends.** An authentication session does not decrypt content, and OAuth account recovery is not data recovery. Secure persistence, device pairing, key authentication, and encrypted sharing are not implemented.
+
+Migration `0002` leaves old plaintext notes untouched and unreachable through the current API. It neither encrypts old data nor securely purges disks or backups. There are no shipped consumers requiring a legacy plaintext fallback. Do not delete development data without authorization.
+
+Private titles, bodies, ink, OCR indexes/results, reminder rules, audio, filenames, attachments, and comments must be encrypted before upload. OCR, search, and reminder scheduling run locally; Workers AI must not receive private content. Server-visible metadata still includes owner/document/key IDs, revisions, timestamps, lengths, and network/access information. E2EE does not promise full anonymity or malicious-server rollback defense. See the [architecture decision](docs/architecture/0001-android-e2ee.md) and [security boundary](SECURITY.md).
 
 ## Quick Start
 
@@ -67,6 +74,8 @@ The port is published only to localhost on the host. The named volume is develop
 
 - `apps/api/src/`: Worker and deterministic schedule core.
 - `apps/api/migrations/`: D1 schema migrations.
+- `packages/protocol/src/note-envelope.ts`: encrypted note envelope validation.
+- `packages/crypto/src/notes.ts`: WebCrypto client reference, not a durable key vault.
 - `tests/`: synthetic-data Worker/D1 integration and scheduling tests.
 - `scripts/`: local-only credential provisioning and smoke verification.
 - `docs/PRD.md`: full proposed product scope and acceptance criteria.
@@ -79,11 +88,11 @@ The port is published only to localhost on the host. The named volume is develop
 
 Every completed stage is reviewed, tested, committed, and pushed independently. A Git push is **not** a deployment or an assertion that all product features exist. GitHub Actions performs checks only; it has no Cloudflare deployment credentials.
 
-The next stage is the editor/ink, offline collaboration, and OCR feasibility work plus a confirmed mobile platform/identity decision. Flutter is not installed in the current development environment.
+Next gates are a reviewed vault/recovery design and Android finger-ink, encrypted collaboration, and local OCR feasibility. Flutter is not installed. Android-only and required E2EE are confirmed; iOS, APNs, macOS workflows, stylus input, pressure features, and palm rejection are out of scope, not pending. Finger input requires explicit draw/navigation modes, one-finger ink in draw mode, two-finger pan/zoom, and ambiguous-gesture tests; no pressure support is promised.
 
 ## Capacity and Cost
 
-Ten daily users is a low-volume planning assumption, not a guarantee of zero cost. Workers/D1 quotas, future R2 storage and operations, collaboration messages, and OCR budgets still need measurement. R2 overage can be billable. FCM/APNs setup and app-store distribution are separate from Cloudflare hosting. No paid resource has been created by this foundation.
+Ten daily users is a low-volume planning assumption, not a guarantee of zero cost. Workers/D1 quotas, future R2 storage and operations, encrypted collaboration messages, and local OCR device budgets still need measurement. R2 overage can be billable. Any future content-free FCM wake-up setup and Android distribution are separate from Cloudflare hosting. No cloud deployment resources have been created.
 
 ## License
 

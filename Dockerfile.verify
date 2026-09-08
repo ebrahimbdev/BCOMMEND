@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 COPY tsconfig.json vitest.config.ts ./
 COPY apps/api ./apps/api
+COPY packages ./packages
 COPY tests ./tests
 COPY scripts ./scripts
 RUN npm run check

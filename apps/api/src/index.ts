@@ -1,12 +1,11 @@
-import { nextOccurrences } from "./schedule";
+import { validateEnvelope } from "../../../packages/protocol/src/note-envelope";
 
 export interface Env { DB: D1Database }
 
 interface Note {
   id: string;
   owner_id: string;
-  title: string;
-  content: string;
+  envelope: string;
   version: number;
   created_at: number;
   updated_at: number;
@@ -74,23 +73,32 @@ async function authenticate(request: Request, db: D1Database) {
 }
 
 function validateNote(data: Record<string, unknown>) {
-  fields(data, ["title", "content", "expectedVersion"]);
-  if (typeof data.title !== "string" || data.title.trim().length < 1 || data.title.length > 200 || data.title.includes("\0")) {
-    throw new HttpError(400, "invalid_title", "title must contain 1 to 200 characters");
-  }
-  if (typeof data.content !== "string" || data.content.length > 20000 || data.content.includes("\0")) {
-    throw new HttpError(400, "invalid_content", "content must be text of at most 20000 characters");
-  }
+  fields(data, ["envelope", "expectedVersion"]);
   if (!Number.isSafeInteger(data.expectedVersion) || (data.expectedVersion as number) < 0 || (data.expectedVersion as number) >= Number.MAX_SAFE_INTEGER) {
     throw new HttpError(400, "invalid_version", "expectedVersion must be a nonnegative safe integer");
   }
-  return { title: data.title.trim(), content: data.content, version: data.expectedVersion as number };
+  let envelope;
+  try { envelope = validateEnvelope(data.envelope); }
+  catch { throw new HttpError(400, "invalid_envelope", "A valid encrypted note envelope is required"); }
+  const version = data.expectedVersion as number;
+  if (envelope.revision !== version + 1) {
+    throw new HttpError(400, "invalid_revision", "Envelope revision must equal expectedVersion + 1");
+  }
+  // Fixed field order makes initial-create retries independent of JSON key order.
+  return { envelope: JSON.stringify({ format: envelope.format, algorithm: envelope.algorithm, keyId: envelope.keyId,
+    revision: envelope.revision, nonce: envelope.nonce, ciphertext: envelope.ciphertext }), version };
+}
+
+function publicNote(note: Note) {
+  const envelope = validateEnvelope(JSON.parse(note.envelope));
+  if (envelope.revision !== note.version) throw new Error("Stored revision mismatch");
+  return { ...note, envelope };
 }
 
 async function route(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
-  if (request.method === "GET" && path === "/health") return json({ status: "ok", service: "bcommend-api", version: "0.1.0" });
+  if (request.method === "GET" && path === "/health") return json({ status: "ok", service: "bcommend-api", version: "0.2.0" });
   if (!path.startsWith("/v1/")) throw new HttpError(404, "not_found", "Route not found");
   const { userId, hash } = await authenticate(request, env.DB);
   if (path === "/v1/me" && request.method === "GET") return json({ id: userId });
@@ -99,13 +107,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ revoked: true });
   }
   if (path === "/v1/reminders/preview" && request.method === "POST") {
-    const data = await body(request);
-    fields(data, ["schedule", "after", "limit"]);
-    try {
-      return json({ occurrences: nextOccurrences(data.schedule, data.after as string, data.limit === undefined ? 10 : data.limit as number) });
-    } catch (error) {
-      throw new HttpError(400, "invalid_schedule", error instanceof Error ? error.message : "Invalid schedule");
-    }
+    throw new HttpError(410, "local_processing_required", "Compute encrypted note reminders locally");
   }
   if (path === "/v1/notes" && request.method === "GET") {
     const cursor = url.searchParams.get("cursor");
@@ -114,33 +116,34 @@ async function route(request: Request, env: Env): Promise<Response> {
     if ((cursor !== null && !UUID.test(cursor)) || !/^\d{1,3}$/.test(rawLimit) || limit < 1 || limit > 100) {
       throw new HttpError(400, "invalid_pagination", "Use a UUID cursor and limit between 1 and 100");
     }
-    const { results } = await env.DB.prepare("SELECT id, title, version, created_at, updated_at FROM notes WHERE owner_id = ? AND deleted_at IS NULL AND id > ? ORDER BY id LIMIT ?")
-      .bind(userId, cursor ?? "", limit + 1).all<Omit<Note, "owner_id" | "content" | "deleted_at">>();
+    const { results } = await env.DB.prepare("SELECT id, version, created_at, updated_at FROM encrypted_notes WHERE owner_id = ? AND deleted_at IS NULL AND id > ? ORDER BY id LIMIT ?")
+      .bind(userId, cursor ?? "", limit + 1).all<Pick<Note, "id" | "version" | "created_at" | "updated_at">>();
     return json({ notes: results.slice(0, limit), nextCursor: results.length > limit ? results[limit - 1]!.id : null });
   }
   const match = /^\/v1\/notes\/([^/]+)$/.exec(path);
   if (!match || !UUID.test(match[1]!)) throw new HttpError(404, "not_found", "Route not found");
   const id = match[1]!;
   if (request.method === "GET") {
-    const note = await env.DB.prepare("SELECT * FROM notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first<Note>();
+    const note = await env.DB.prepare("SELECT * FROM encrypted_notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first<Note>();
     if (!note) throw new HttpError(404, "not_found", "Note not found");
-    return json({ note });
+    return json({ note: publicNote(note) });
   }
   if (request.method === "PUT") {
     const data = validateNote(await body(request));
     const now = Date.now();
     if (data.version === 0) {
-      const inserted = await env.DB.prepare("INSERT INTO notes (id, owner_id, title, content, version, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING *")
-        .bind(id, userId, data.title, data.content, now, now).first<Note>();
-      if (inserted) return json({ note: inserted }, 201);
-      const existing = await env.DB.prepare("SELECT * FROM notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first<Note>();
-      if (existing?.version === 1 && existing.title === data.title && existing.content === data.content) return json({ note: existing });
+      const inserted = await env.DB.prepare("INSERT INTO encrypted_notes (id, owner_id, envelope, version, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING *")
+        .bind(id, userId, data.envelope, now, now).first<Note>();
+      if (inserted) return json({ note: publicNote(inserted) }, 201);
+      const existing = await env.DB.prepare("SELECT * FROM encrypted_notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first<Note>();
+      const existingNote = existing ? publicNote(existing) : null;
+      if (existing?.version === 1 && existing.envelope === data.envelope) return json({ note: existingNote });
       throw new HttpError(409, "conflict", "ID unavailable or content has changed; fetch before retrying");
     }
-    const note = await env.DB.prepare("UPDATE notes SET title = ?, content = ?, version = version + 1, updated_at = ? WHERE id = ? AND owner_id = ? AND version = ? AND deleted_at IS NULL RETURNING *")
-      .bind(data.title, data.content, now, id, userId, data.version).first<Note>();
-    if (note) return json({ note });
-    const current = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first();
+    const note = await env.DB.prepare("UPDATE encrypted_notes SET envelope = ?, version = version + 1, updated_at = ? WHERE id = ? AND owner_id = ? AND version = ? AND deleted_at IS NULL RETURNING *")
+      .bind(data.envelope, now, id, userId, data.version).first<Note>();
+    if (note) return json({ note: publicNote(note) });
+    const current = await env.DB.prepare("SELECT id FROM encrypted_notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first();
     if (!current) throw new HttpError(404, "not_found", "Note not found");
     throw new HttpError(409, "conflict", "Version changed; fetch before retrying");
   }
@@ -150,10 +153,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw new HttpError(400, "invalid_version", "Provide the current version as a quoted If-Match value");
     }
     const now = Date.now();
-    const deleted = await env.DB.prepare("UPDATE notes SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND owner_id = ? AND version = ? AND deleted_at IS NULL RETURNING id, version")
+    const deleted = await env.DB.prepare("UPDATE encrypted_notes SET deleted_at = ?, updated_at = ?, version = version + 1 WHERE id = ? AND owner_id = ? AND version = ? AND deleted_at IS NULL RETURNING id, version")
       .bind(now, now, id, userId, Number(header.slice(1, -1))).first();
     if (deleted) return json({ deleted });
-    const current = await env.DB.prepare("SELECT id FROM notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first();
+    const current = await env.DB.prepare("SELECT id FROM encrypted_notes WHERE id = ? AND owner_id = ? AND deleted_at IS NULL").bind(id, userId).first();
     if (!current) throw new HttpError(404, "not_found", "Note not found");
     throw new HttpError(409, "conflict", "Version changed; fetch before deleting");
   }

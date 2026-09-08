@@ -1,91 +1,73 @@
-# Stage 1 API
+# Stage 2A Development API
 
-All `/v1/` routes require `Authorization: Bearer <local-session-token>`. `/health` is public liveness only and does not test D1 readiness. API responses use JSON and `Cache-Control: no-store`. There is no browser CORS policy yet; use native/CLI clients. Tokens in query strings are not supported.
+**Encrypted transport foundation: implemented and locally verified.** This is not a stable external API or a complete E2EE application. Current test evidence is recorded in [VERIFICATION.md](VERIFICATION.md); remote CI remains unverified.
 
-This is a development contract, not a stable external API. No production login, full notebook model, reminder persistence, or synchronization protocol is shipped.
+All `/v1/` routes require `Authorization: Bearer <local-session-token>`. `/health` is public liveness, not D1 readiness. Responses use JSON and `Cache-Control: no-store`. There is no browser CORS policy yet; use native/CLI clients. Query-string tokens are unsupported. No production login, Android app, durable key vault, full notebook model, reminder persistence, or CRDT protocol is shipped.
 
-## Errors
+## Errors and Identity
 
-```json
+Errors use `{ "error": { "code": "conflict", "message": "Version changed; fetch before retrying" } }` with the appropriate code/message.
+
+Relevant statuses: `400` invalid input (including old plaintext payloads), `401` invalid/expired/revoked session, `404` absent/inaccessible note, `409` version or ID conflict, `410` retired reminder preview, `413` body limit, `415` content type, and `503` unexpected service/storage failure. Retain unsaved changes on every failure. Do not blindly retry conflicts using the latest version.
+
+- `GET /v1/me`: returns `{ "id": "..." }` for the authenticated owner.
+- `DELETE /v1/session`: revokes this session; subsequent use returns `401`.
+
+Provisioning has no HTTP endpoint and the local CLI rejects remote operation. Authentication permits transport access but cannot decrypt content.
+
+## Envelope and Client Reference
+
+`packages/protocol/src/note-envelope.ts` validates this exact envelope shape:
+
+```ts
 {
-  "error": {
-    "code": "conflict",
-    "message": "Version changed; fetch before retrying"
-  }
+  format: 1,
+  algorithm: 'A256GCM',
+  keyId: string,      // Lowercase UUID.
+  revision: number,   // Positive safe integer.
+  nonce: string,      // Canonical unpadded base64url: exactly 12 decoded bytes.
+  ciphertext: string  // Canonical unpadded base64url: 16..65536 decoded bytes.
 }
 ```
 
-Relevant status codes: `400` invalid input, `401` invalid/expired/revoked session, `404` absent/inaccessible note, `409` version or ID conflict, `413` body limit, `415` content type, `503` unexpected service/storage failure. Clients must retain unsaved changes on every failure. Do not blindly retry `409` with the newest version: let the user resolve content differences.
+Base64url must use the URL-safe alphabet, no padding, and canonical encoding. The ciphertext includes the 128-bit authentication tag. Plaintext is at most 65,520 bytes. The WebCrypto reference in `packages/crypto/src/notes.ts` uses AES-256-GCM and a fresh random 12-byte nonce on encryption:
 
-## Identity
+```ts
+generateNoteKey()
+encryptNote(key, context, plaintext /* Uint8Array */)
+decryptNote(key, context, envelope)
+```
 
-- `GET /v1/me`: returns `{ "id": "..." }` for the current user.
-- `DELETE /v1/session`: revokes the current session. A subsequent request with it returns `401`.
+Context is `{ownerId,noteId,keyId,revision}`. Additional authenticated data (AAD) is exactly the UTF-8 bytes of:
 
-Provisioning has no HTTP endpoint and the local CLI explicitly refuses arguments such as `--remote`.
+```js
+JSON.stringify(['bcommend.note',1,ownerId,noteId,keyId,revision])
+```
+
+Private titles and bodies belong inside the client-encrypted plaintext, not top-level transport fields. The envelope is opaque bytes, not a final canvas schema. The server validates shape and revision relationships; it cannot detect a buggy client uploading base64 plaintext instead of actual ciphertext. AEAD authentication is verified only on the client. CAS is not malicious-server rollback defense.
+
+**Startup warning: `generateNoteKey()` creates a nonexportable, memory-only reference key. No vault, persistence, wrapping, or recovery is implemented. Encrypted data can be unrecoverable after process exit. Do not store important data.** Session renewal or OAuth recovery does not recover encryption keys. See `architecture/0001-android-e2ee.md` for proposed, unimplemented key-management gates.
 
 ## Notes
 
-`PUT /v1/notes/{id}` uses a client-generated lowercase UUID. To create, send:
+`PUT /v1/notes/{id}` uses a client-generated lowercase UUID and accepts only `{envelope,expectedVersion}`. Creation uses `expectedVersion: 0` and envelope revision `1`. Replacement sends the full envelope and last fetched positive expected version. In every PUT, `envelope.revision` must equal `expectedVersion + 1`.
 
-```json
-{
-  "title": "Meeting notes",
-  "content": "Plain text for the first development stage.",
-  "expectedVersion": 0
-}
-```
+- Creation returns `201` with `{ "note": ... }`. An initial creation retry with the same envelope and owner returns `200`; other reused IDs return a generic `409` without exposing another owner's data.
+- Replacement atomically checks/increments the stored version and returns `200`, or `409` on conflict. Update retries are not automatically idempotent: after a lost response, fetch and compare before resolving or retrying. Re-encryption for a new revision must use that revision's context/AAD and a fresh nonce.
+- `GET /v1/notes/{id}` returns `{ "note": ... }` containing the envelope object plus metadata: `id`, `owner_id`, `version`, `created_at`, `updated_at`, and `deleted_at`. Timestamps are Unix milliseconds.
+- `GET /v1/notes?limit=25&cursor={id}` returns `{ "notes": [...], "nextCursor": null }` with metadata only (IDs, versions, timestamps), no title and no envelope. Limit is 1-100; omit cursor initially. UUID-ordered lists are not snapshots or sync feeds; newly inserted IDs before the cursor require a fresh listing.
+- `DELETE /v1/notes/{id}` requires the quoted current version in `If-Match`, for example `If-Match: "2"`. It soft-deletes and increments the version. Stale deletes return `409`; deleted/inaccessible notes return `404`.
 
-The response is `201` with `{ "note": ... }`. A note contains `id`, `owner_id`, `title`, `content`, `version`, `created_at`, `updated_at`, and `deleted_at`. Numeric timestamps are Unix milliseconds. A creation retry returns the original version-1 note with `200` only when the same owner, normalized title, and content match. Other reused IDs return a generic `409` without disclosing another owner's content.
+Owner isolation, authentication, CAS, and deletion semantics remain. Deleted IDs cannot be recreated; there is no restore/purge endpoint or retained version history. Old `{title,content,expectedVersion}` requests return `400`; there are no shipped consumers and no legacy fallback. Unknown fields are rejected. JSON bodies are limited to 128 KiB of actual UTF-8 input regardless of Content-Length. Per-user rate/storage quotas are not implemented; do not expose this foundation publicly.
 
-To replace a note, send the complete title/content and the last fetched positive `expectedVersion`. The database checks and increments the version atomically. The response is `200` with the new note, or `409` if a newer version exists. Update retries are not automatically idempotent: after a lost response, fetch and compare before resolving or retrying.
+Migration `0002` creates a separate encrypted-notes table and leaves old `notes` data untouched and unreachable through the API. It does not encrypt old records or securely purge plaintext from disks/backups. Do not delete development data without authorization.
 
-- `GET /v1/notes/{id}`: returns one active, owned note.
-- `GET /v1/notes?limit=25&cursor={id}`: UUID-ordered summaries without content; response `{ "notes": [...], "nextCursor": null }`. Limit is 1-100; omit cursor for the first page. Lists are not snapshots or sync feeds; new IDs sorting before an existing cursor appear on a fresh listing.
-- `DELETE /v1/notes/{id}`: requires a quoted current version in `If-Match`, for example `If-Match: "2"`. Soft-deletes and increments the version. Stale deletes return `409`; already deleted/inaccessible notes return `404`.
+## Retired Reminder Preview
 
-Deleted IDs cannot be recreated. Tombstones are retained in this stage, with no restore or purge endpoint. Notes are text only: consumers must treat content as text, not trusted HTML.
+`POST /v1/reminders/preview` is retired and returns `410` after authentication; invalid sessions still return `401`. Do not send private reminder rules to the server. The pure `schedule.ts` once/fixed-interval core remains, but the client must perform private scheduling locally. Calendar/Jalali recurrence, durable reminders, and notification delivery are not implemented.
 
-Validation: title is trimmed and must be nonempty and at most 200 JavaScript UTF-16 code units before trimming; content is at most 20,000 code units; NUL is rejected. Unknown fields are rejected. JSON bodies are limited to 128 KiB of actual UTF-8 input regardless of Content-Length. There is no per-user storage/rate quota yet; do not expose this development foundation publicly.
+## Future Content Boundaries
 
-## Schedule Preview
+Private ink, OCR indexes/results, reminder rules, audio, filenames, attachments, and comments also require encryption before upload. OCR/search/reminders run locally, not through Workers AI on private content. Future Durable Objects relay encrypted CRDT updates; clients decrypt and merge, never the server. Encrypted sharing is not shipped; public-share keys must never use query parameters sent to a server and require a future reviewed delivery flow.
 
-`POST /v1/reminders/preview`:
-
-```json
-{
-  "schedule": {
-    "kind": "interval",
-    "startAt": "2026-09-07T09:00:00.000Z",
-    "everySeconds": 3600,
-    "count": 3
-  },
-  "after": "2026-09-07T09:00:00.000Z",
-  "limit": 10
-}
-```
-
-Response:
-
-```json
-{
-  "occurrences": [
-    "2026-09-07T10:00:00.000Z",
-    "2026-09-07T11:00:00.000Z"
-  ]
-}
-```
-
-Rules:
-
-- `once` accepts only `kind` and `startAt`.
-- `interval` uses elapsed seconds, not a named time zone or calendar day.
-- `everySeconds` is an integer from 60 to 31,536,000.
-- Optional `count` is 1-10,000 and includes the original start, not just the returned results.
-- Optional `until` is inclusive and cannot precede the start. Choose count or until, not both.
-- Omit both count/until for a rule without an explicit end. A preview still returns at most 100 occurrences.
-- `after` is exclusive; `limit` defaults to 10 and must be 1-100.
-- Timestamps must be valid canonical UTC strings with milliseconds and `Z`, using four-digit years.
-- Calendar, Jalali, DST, snooze, completion, and monthly rules are not yet implemented. Unsupported fields/rules fail validation rather than silently using interval semantics.
-
-The preview **does not persist a reminder, enqueue work, or deliver an alert**.
+Owner/document/key IDs, revisions, timestamps, lengths, and network/access metadata remain visible. This contract promises neither full anonymity nor malicious-server rollback defense. Independent crypto/security review and Kotlin/Dart interoperability vector tests are launch gates, not current verification claims.
